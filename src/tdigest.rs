@@ -1,61 +1,10 @@
-use arrow::datatypes::DataType;
-use arrow_array::types::Float64Type;
-use datafusion_common::cast::as_primitive_array;
-use datafusion_common::Result;
-use datafusion_common::ScalarValue;
 use std::cmp::Ordering;
 
-pub const DEFAULT_MAX_SIZE: usize = 100;
-
-// Cast a non-null [`ScalarValue::Float64`] to an [`f64`], or
-// panic.
-macro_rules! cast_scalar_f64 {
-  ($value:expr ) => {
-    match &$value {
-      ScalarValue::Float64(Some(v)) => *v,
-      v => panic!("invalid type {:?}", v),
-    }
-  };
-}
-
-/// This trait is implemented for each type a [`TDigest`] can operate on,
-/// allowing it to support both numerical rust types (obtained from
-/// `PrimitiveArray` instances), and [`ScalarValue`] instances.
-pub(crate) trait TryIntoF64 {
-  /// A fallible conversion of a possibly null `self` into a [`f64`].
-  ///
-  /// If `self` is null, this method must return `Ok(None)`.
-  ///
-  /// If `self` cannot be coerced to the desired type, this method must return
-  /// an `Err` variant.
-  fn try_as_f64(&self) -> Result<Option<f64>>;
-}
-
-/// Generate an infallible conversion from `type` to an [`f64`].
-macro_rules! impl_try_ordered_f64 {
-  ($type:ty) => {
-    impl TryIntoF64 for $type {
-      fn try_as_f64(&self) -> Result<Option<f64>> {
-        Ok(Some(*self as f64))
-      }
-    }
-  };
-}
-
-impl_try_ordered_f64!(f64);
-impl_try_ordered_f64!(f32);
-impl_try_ordered_f64!(i64);
-impl_try_ordered_f64!(i32);
-impl_try_ordered_f64!(i16);
-impl_try_ordered_f64!(i8);
-impl_try_ordered_f64!(u64);
-impl_try_ordered_f64!(u32);
-impl_try_ordered_f64!(u16);
-impl_try_ordered_f64!(u8);
+const DEFAULT_MAX_SIZE: usize = 100;
 
 /// Centroid implementation to the cluster mentioned in the paper.
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct Centroid {
+struct Centroid {
   mean: f64,
   weight: f64,
 }
@@ -75,21 +24,21 @@ impl Ord for Centroid {
 }
 
 impl Centroid {
-  pub(crate) fn new(mean: f64, weight: f64) -> Self {
+  fn new(mean: f64, weight: f64) -> Self {
     Centroid { mean, weight }
   }
 
   #[inline]
-  pub(crate) fn mean(&self) -> f64 {
+  fn mean(&self) -> f64 {
     self.mean
   }
 
   #[inline]
-  pub(crate) fn weight(&self) -> f64 {
+  fn weight(&self) -> f64 {
     self.weight
   }
 
-  pub(crate) fn add(&mut self, sum: f64, weight: f64) -> f64 {
+  fn add(&mut self, sum: f64, weight: f64) -> f64 {
     let new_sum = sum + self.weight * self.mean;
     let new_weight = self.weight + weight;
     self.weight = new_weight;
@@ -109,7 +58,7 @@ impl Default for Centroid {
 
 /// T-Digest to be operated on.
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct TDigest {
+pub struct TDigest {
   centroids: Vec<Centroid>,
   max_size: usize,
   sum: f64,
@@ -119,7 +68,7 @@ pub(crate) struct TDigest {
 }
 
 impl TDigest {
-  pub(crate) fn new(max_size: usize) -> Self {
+  pub fn new(max_size: usize) -> Self {
     TDigest {
       centroids: Vec::new(),
       max_size,
@@ -130,39 +79,28 @@ impl TDigest {
     }
   }
 
-  pub(crate) fn new_with_centroid(max_size: usize, centroid: Centroid) -> Self {
-    TDigest {
-      centroids: vec![centroid.clone()],
-      max_size,
-      sum: centroid.mean * centroid.weight,
-      count: 1_f64,
-      max: centroid.mean,
-      min: centroid.mean,
-    }
-  }
-
   #[inline]
-  pub(crate) fn count(&self) -> f64 {
+  pub fn count(&self) -> f64 {
     self.count
   }
 
   #[inline]
-  pub(crate) fn max(&self) -> f64 {
+  pub fn max(&self) -> f64 {
     self.max
   }
 
   #[inline]
-  pub(crate) fn min(&self) -> f64 {
+  pub fn min(&self) -> f64 {
     self.min
   }
 
   #[inline]
-  pub(crate) fn max_size(&self) -> usize {
+  pub fn max_size(&self) -> usize {
     self.max_size
   }
 
   /// Size in bytes including `Self`.
-  pub(crate) fn size(&self) -> usize {
+  pub fn size(&self) -> usize {
     std::mem::size_of_val(self)
       + (std::mem::size_of::<Centroid>() * self.centroids.capacity())
   }
@@ -172,7 +110,7 @@ impl Default for TDigest {
   fn default() -> Self {
     TDigest {
       centroids: Vec::new(),
-      max_size: 100,
+      max_size: DEFAULT_MAX_SIZE,
       sum: 0_f64,
       count: 0_f64,
       max: f64::NAN,
@@ -200,16 +138,13 @@ impl TDigest {
   }
 
   #[cfg(test)]
-  pub(crate) fn merge_unsorted_f64(
-    &self,
-    unsorted_values: Vec<f64>,
-  ) -> TDigest {
+  pub fn merge_unsorted_f64(&self, unsorted_values: Vec<f64>) -> TDigest {
     let mut values = unsorted_values;
     values.sort_by(|a, b| a.total_cmp(b));
     self.merge_sorted_f64(&values)
   }
 
-  pub(crate) fn merge_sorted_f64(&self, sorted_values: &[f64]) -> TDigest {
+  pub fn merge_sorted_f64(&self, sorted_values: &[f64]) -> TDigest {
     #[cfg(debug_assertions)]
     debug_assert!(is_sorted(sorted_values), "unsorted input to TDigest");
 
@@ -345,7 +280,7 @@ impl TDigest {
   }
 
   // Merge multiple T-Digests
-  pub(crate) fn merge_digests(digests: &[TDigest]) -> TDigest {
+  pub fn merge_digests(digests: &[TDigest]) -> TDigest {
     let n_centroids: usize = digests.iter().map(|d| d.centroids.len()).sum();
     if n_centroids == 0 {
       return TDigest::default();
@@ -438,7 +373,7 @@ impl TDigest {
   }
 
   /// To estimate the value located at `q` quantile
-  pub(crate) fn estimate_quantile(&self, q: f64) -> f64 {
+  pub fn estimate_quantile(&self, q: f64) -> f64 {
     if self.centroids.is_empty() {
       return 0.0;
     }
@@ -507,108 +442,6 @@ impl TDigest {
 
     Self::clamp(value, min, max)
   }
-
-  /// This method decomposes the [`TDigest`] and its [`Centroid`] instances
-  /// into a series of primitive scalar values.
-  ///
-  /// First the values of the TDigest are packed, followed by the variable
-  /// number of centroids packed into a [`ScalarValue::List`] of
-  /// [`ScalarValue::Float64`]:
-  ///
-  /// ```text
-  ///
-  ///    ┌────────┬────────┬────────┬───────┬────────┬────────┐
-  ///    │max_size│  sum   │ count  │  max  │  min   │centroid│
-  ///    └────────┴────────┴────────┴───────┴────────┴────────┘
-  ///                                                     │
-  ///                               ┌─────────────────────┘
-  ///                               ▼
-  ///                          ┌ List ───┐
-  ///                          │┌ ─ ─ ─ ┐│
-  ///                          │  mean   │
-  ///                          │├ ─ ─ ─ ┼│─ ─ Centroid 1
-  ///                          │ weight  │
-  ///                          │└ ─ ─ ─ ┘│
-  ///                          │         │
-  ///                          │┌ ─ ─ ─ ┐│
-  ///                          │  mean   │
-  ///                          │├ ─ ─ ─ ┼│─ ─ Centroid 2
-  ///                          │ weight  │
-  ///                          │└ ─ ─ ─ ┘│
-  ///                          │         │
-  ///                              ...
-  ///
-  /// ```
-  ///
-  /// The [`TDigest::from_scalar_state()`] method reverses this processes,
-  /// consuming the output of this method and returning an unpacked
-  /// [`TDigest`].
-  pub(crate) fn to_scalar_state(&self) -> Vec<ScalarValue> {
-    // Gather up all the centroids
-    let centroids: Vec<ScalarValue> = self
-      .centroids
-      .iter()
-      .flat_map(|c| [c.mean(), c.weight()])
-      .map(|v| ScalarValue::Float64(Some(v)))
-      .collect();
-
-    let arr = ScalarValue::new_list(&centroids, &DataType::Float64);
-
-    vec![
-      ScalarValue::UInt64(Some(self.max_size as u64)),
-      ScalarValue::Float64(Some(self.sum)),
-      ScalarValue::Float64(Some(self.count)),
-      ScalarValue::Float64(Some(self.max)),
-      ScalarValue::Float64(Some(self.min)),
-      ScalarValue::List(arr),
-    ]
-  }
-
-  /// Unpack the serialised state of a [`TDigest`] produced by
-  /// [`Self::to_scalar_state()`].
-  ///
-  /// # Correctness
-  ///
-  /// Providing input to this method that was not obtained from
-  /// [`Self::to_scalar_state()`] results in undefined behaviour and may
-  /// panic.
-  pub(crate) fn from_scalar_state(state: &[ScalarValue]) -> Self {
-    assert_eq!(state.len(), 6, "invalid TDigest state");
-
-    let max_size = match &state[0] {
-      ScalarValue::UInt64(Some(v)) => *v as usize,
-      v => panic!("invalid max_size type {v:?}"),
-    };
-
-    let centroids: Vec<_> = match &state[5] {
-      ScalarValue::List(arr) => {
-        let array = arr.values();
-
-        let f64arr =
-          as_primitive_array::<Float64Type>(array).expect("expected f64 array");
-        f64arr
-          .values()
-          .chunks(2)
-          .map(|v| Centroid::new(v[0], v[1]))
-          .collect()
-      }
-      v => panic!("invalid centroids type {v:?}"),
-    };
-
-    let max = cast_scalar_f64!(&state[3]);
-    let min = cast_scalar_f64!(&state[4]);
-
-    assert!(max.total_cmp(&min).is_ge());
-
-    Self {
-      max_size,
-      sum: cast_scalar_f64!(state[1]),
-      count: cast_scalar_f64!(&state[2]),
-      max,
-      min,
-      centroids,
-    }
-  }
 }
 
 #[cfg(debug_assertions)]
@@ -646,14 +479,6 @@ mod tests {
     };
   }
 
-  macro_rules! assert_state_roundtrip {
-    ($t:ident) => {
-      let state = $t.to_scalar_state();
-      let other = TDigest::from_scalar_state(&state);
-      assert_eq!($t, other);
-    };
-  }
-
   #[test]
   fn test_int64_uniform() {
     let values = (1i64..=1000).map(|v| v as f64).collect();
@@ -664,7 +489,6 @@ mod tests {
     assert_error_bounds!(t, quantile = 0.1, want = 100.0);
     assert_error_bounds!(t, quantile = 0.5, want = 500.0);
     assert_error_bounds!(t, quantile = 0.9, want = 900.0);
-    assert_state_roundtrip!(t);
   }
 
   #[test]
@@ -680,7 +504,6 @@ mod tests {
 
     assert_error_bounds!(t, quantile = 0.5, want = 1.0);
     assert_error_bounds!(t, quantile = 0.95, want = 2.0);
-    assert_state_roundtrip!(t);
   }
 
   #[test]
@@ -695,7 +518,6 @@ mod tests {
     assert_error_bounds!(t, quantile = 0.01, want = 10_000.0);
     assert_error_bounds!(t, quantile = 0.0, want = 1.0);
     assert_error_bounds!(t, quantile = 0.5, want = 500_000.0);
-    assert_state_roundtrip!(t);
   }
 
   #[test]
@@ -709,7 +531,6 @@ mod tests {
     assert_error_bounds!(t, quantile = 0.99, want = 1_000_000.0);
     assert_error_bounds!(t, quantile = 0.01, want = 10_000.0);
     assert_error_bounds!(t, quantile = 0.5, want = 500_000.0);
-    assert_state_roundtrip!(t);
   }
 
   #[test]
@@ -735,7 +556,6 @@ mod tests {
     );
     assert_error_bounds!(t, quantile = 0.0, want = 1.0);
     assert_error_bounds!(t, quantile = 0.5, want = 500.0);
-    assert_state_roundtrip!(t);
   }
 
   #[test]
