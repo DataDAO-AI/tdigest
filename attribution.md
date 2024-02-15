@@ -1,4 +1,4 @@
-This project is forked from code in [Apache Arrow Datafusion], which is licensed under the Apache License, version 2.0, the content of which is copied here:
+This project is forked from code in [Apache Arrow Datafusion](https://github.com/apache/arrow-datafusion/), which is licensed under the Apache License, version 2.0, the content of which is copied here:
 
 ```
 
