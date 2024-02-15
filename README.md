@@ -1,0 +1,1 @@
+An implementation of [the t-digest algorithm](https://arxiv.org/abs/1902.04023), forked from [the implementation in Apache Arrow Datafusion](https://github.com/apache/arrow-datafusion/blob/8aaea5d6eb8e918bb876b3b2374e9f847087ce6d/datafusion/physical-expr/src/aggregate/tdigest.rs).
