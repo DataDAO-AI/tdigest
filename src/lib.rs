@@ -111,7 +111,6 @@ impl TDigest {
     v.clamp(lo, hi)
   }
 
-  #[cfg(test)]
   pub fn merge_values(&self, unsorted_values: Vec<f64>) -> TDigest {
     let mut values = unsorted_values;
     values.sort_by(|a, b| a.total_cmp(b));
