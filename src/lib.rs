@@ -2,54 +2,61 @@ use std::cmp::Ordering;
 
 const DEFAULT_MAX_SIZE: usize = 100;
 
-/// Centroid implementation to the cluster mentioned in the paper.
 #[derive(Debug, PartialEq, Clone)]
-struct Centroid {
-  mean: f64,
+pub struct WeightedValue {
+  value: f64,
   weight: f64,
 }
 
-impl PartialOrd for Centroid {
-  fn partial_cmp(&self, other: &Centroid) -> Option<Ordering> {
+impl Eq for WeightedValue {}
+
+impl PartialOrd for WeightedValue {
+  fn partial_cmp(&self, other: &WeightedValue) -> Option<Ordering> {
     Some(self.cmp(other))
   }
 }
 
-impl Eq for Centroid {}
-
-impl Ord for Centroid {
-  fn cmp(&self, other: &Centroid) -> Ordering {
-    self.mean.total_cmp(&other.mean)
+impl From<(f64, f64)> for WeightedValue {
+  fn from((value, weight): (f64, f64)) -> Self {
+    Self { value, weight }
   }
 }
 
-impl Default for Centroid {
+impl Ord for WeightedValue {
+  fn cmp(&self, other: &WeightedValue) -> Ordering {
+    self.value.total_cmp(&other.value)
+  }
+}
+
+impl Default for WeightedValue {
   fn default() -> Self {
-    Centroid {
-      mean: 0_f64,
+    WeightedValue {
+      value: 0_f64,
       weight: 1_f64,
     }
   }
 }
 
-impl Centroid {
-  fn new(mean: f64, weight: f64) -> Self {
-    Centroid { mean, weight }
+impl WeightedValue {
+  fn new(value: f64, weight: f64) -> Self {
+    WeightedValue { value, weight }
   }
 
   fn add(&mut self, sum: f64, weight: f64) -> f64 {
-    let new_sum = sum + self.weight * self.mean;
-    let new_weight = self.weight + weight;
-    self.weight = new_weight;
-    self.mean = new_sum / new_weight;
+    let new_sum = sum + self.weight * self.value;
+    self.weight += weight;
+    self.value = new_sum / self.weight;
     new_sum
+  }
+
+  fn sum(&self) -> f64 {
+    self.value * self.weight
   }
 }
 
-/// T-Digest to be operated on.
 #[derive(Debug, PartialEq, Clone)]
 pub struct TDigest {
-  centroids: Vec<Centroid>,
+  centroids: Vec<WeightedValue>,
   pub max_size: usize,
   pub sum: f64,
   pub count: f64,
@@ -76,7 +83,7 @@ impl TDigest {
   /// Size in bytes including `Self`.
   pub fn size(&self) -> usize {
     std::mem::size_of_val(self)
-      + (std::mem::size_of::<Centroid>() * self.centroids.capacity())
+      + (std::mem::size_of::<WeightedValue>() * self.centroids.capacity())
   }
 }
 
@@ -111,8 +118,22 @@ impl TDigest {
     v.clamp(lo, hi)
   }
 
-  pub fn merge_values(&self, unsorted_values: Vec<f64>) -> TDigest {
-    let mut values = unsorted_values;
+  pub fn merge_weighted_values(
+    &self,
+    mut values: Vec<WeightedValue>,
+  ) -> TDigest {
+    values.sort();
+    self.merge_sorted_weighted_values(&values)
+  }
+
+  pub fn merge_sorted_weighted_values(
+    &self,
+    sorted_values: &[WeightedValue],
+  ) -> TDigest {
+    todo!()
+  }
+
+  pub fn merge_values(&self, mut values: Vec<f64>) -> TDigest {
     values.sort_by(|a, b| a.total_cmp(b));
     self.merge_sorted_values(&values)
   }
@@ -142,7 +163,7 @@ impl TDigest {
       result.max = maybe_max;
     }
 
-    let mut compressed: Vec<Centroid> = Vec::with_capacity(self.max_size);
+    let mut compressed: Vec<WeightedValue> = Vec::with_capacity(self.max_size);
 
     let mut k_limit: f64 = 1.0;
     let mut q_limit_times_count =
@@ -152,15 +173,15 @@ impl TDigest {
     let mut iter_centroids = self.centroids.iter().peekable();
     let mut iter_sorted_values = sorted_values.iter().peekable();
 
-    let mut curr: Centroid = if let Some(c) = iter_centroids.peek() {
+    let mut curr: WeightedValue = if let Some(c) = iter_centroids.peek() {
       let curr = **iter_sorted_values.peek().unwrap();
-      if c.mean < curr {
+      if c.value < curr {
         iter_centroids.next().unwrap().clone()
       } else {
-        Centroid::new(*iter_sorted_values.next().unwrap(), 1.0)
+        WeightedValue::new(*iter_sorted_values.next().unwrap(), 1.0)
       }
     } else {
-      Centroid::new(*iter_sorted_values.next().unwrap(), 1.0)
+      WeightedValue::new(*iter_sorted_values.next().unwrap(), 1.0)
     };
 
     let mut weight_so_far = curr.weight;
@@ -170,19 +191,19 @@ impl TDigest {
 
     while iter_centroids.peek().is_some() || iter_sorted_values.peek().is_some()
     {
-      let next: Centroid = if let Some(c) = iter_centroids.peek() {
+      let next: WeightedValue = if let Some(c) = iter_centroids.peek() {
         if iter_sorted_values.peek().is_none()
-          || c.mean < **iter_sorted_values.peek().unwrap()
+          || c.value < **iter_sorted_values.peek().unwrap()
         {
           iter_centroids.next().unwrap().clone()
         } else {
-          Centroid::new(*iter_sorted_values.next().unwrap(), 1.0)
+          WeightedValue::new(*iter_sorted_values.next().unwrap(), 1.0)
         }
       } else {
-        Centroid::new(*iter_sorted_values.next().unwrap(), 1.0)
+        WeightedValue::new(*iter_sorted_values.next().unwrap(), 1.0)
       };
 
-      let next_sum = next.mean * next.weight;
+      let next_sum = next.sum();
       weight_so_far += next.weight;
 
       if weight_so_far <= q_limit_times_count {
@@ -211,12 +232,12 @@ impl TDigest {
   }
 
   fn external_merge(
-    centroids: &mut [Centroid],
+    centroids: &mut [WeightedValue],
     first: usize,
     middle: usize,
     last: usize,
   ) {
-    let mut result: Vec<Centroid> = Vec::with_capacity(centroids.len());
+    let mut result: Vec<WeightedValue> = Vec::with_capacity(centroids.len());
 
     let mut i = first;
     let mut j = middle;
@@ -263,7 +284,7 @@ impl TDigest {
     }
 
     let max_size = digests.first().unwrap().max_size;
-    let mut centroids: Vec<Centroid> = Vec::with_capacity(n_centroids);
+    let mut centroids: Vec<WeightedValue> = Vec::with_capacity(n_centroids);
     let mut starts: Vec<usize> = Vec::with_capacity(digests.len());
 
     let mut count: f64 = 0.0;
@@ -307,7 +328,7 @@ impl TDigest {
     }
 
     let mut result = TDigest::new_with_max_size(max_size);
-    let mut compressed: Vec<Centroid> = Vec::with_capacity(max_size);
+    let mut compressed: Vec<WeightedValue> = Vec::with_capacity(max_size);
 
     let mut k_limit: f64 = 1.0;
     let mut q_limit_times_count =
@@ -323,7 +344,7 @@ impl TDigest {
       weight_so_far += centroid.weight;
 
       if weight_so_far <= q_limit_times_count {
-        sums_to_merge += centroid.mean * centroid.weight;
+        sums_to_merge += centroid.sum();
         weights_to_merge += centroid.weight;
       } else {
         result.sum += curr.add(sums_to_merge, weights_to_merge);
@@ -399,20 +420,20 @@ impl TDigest {
 
     if self.centroids.len() > 1 {
       if pos == 0 {
-        delta = self.centroids[pos + 1].mean - self.centroids[pos].mean;
-        max = self.centroids[pos + 1].mean;
+        delta = self.centroids[pos + 1].value - self.centroids[pos].value;
+        max = self.centroids[pos + 1].value;
       } else if pos == (self.centroids.len() - 1) {
-        delta = self.centroids[pos].mean - self.centroids[pos - 1].mean;
-        min = self.centroids[pos - 1].mean;
+        delta = self.centroids[pos].value - self.centroids[pos - 1].value;
+        min = self.centroids[pos - 1].value;
       } else {
         delta =
-          (self.centroids[pos + 1].mean - self.centroids[pos - 1].mean) / 2.0;
-        min = self.centroids[pos - 1].mean;
-        max = self.centroids[pos + 1].mean;
+          (self.centroids[pos + 1].value - self.centroids[pos - 1].value) / 2.0;
+        min = self.centroids[pos - 1].value;
+        max = self.centroids[pos + 1].value;
       }
     }
 
-    let value = self.centroids[pos].mean
+    let value = self.centroids[pos].value
       + ((rank - t) / self.centroids[pos].weight - 0.5) * delta;
 
     Self::clamp(value, min, max)
@@ -484,7 +505,7 @@ mod tests {
   #[test]
   fn test_merge_values_against_uniform_distro() {
     let t = TDigest::new();
-    let values: Vec<_> = (1..=1_000_000).map(f64::from).collect();
+    let values: Vec<f64> = (1..=1_000_000).map(f64::from).collect();
 
     let t = t.merge_values(values);
 
@@ -498,7 +519,7 @@ mod tests {
   #[test]
   fn test_merge_values_against_skewed_distro() {
     let t = TDigest::new();
-    let mut values: Vec<_> = (1..=600_000).map(f64::from).collect();
+    let mut values: Vec<f64> = (1..=600_000).map(f64::from).collect();
     values.resize(1_000_000, 1_000_000_f64);
 
     let t = t.merge_values(values);
@@ -509,12 +530,12 @@ mod tests {
   }
 
   #[test]
-  fn test_merge_digests() {
+  fn test_merge_identical_digests() {
     let mut digests: Vec<TDigest> = Vec::new();
 
     for _ in 1..=100 {
       let t = TDigest::new();
-      let values: Vec<_> = (1..=1_000).map(f64::from).collect();
+      let values: Vec<f64> = (1..=1_000).map(f64::from).collect();
       let t = t.merge_values(values);
       digests.push(t)
     }
@@ -531,6 +552,32 @@ mod tests {
     );
     assert_error_bounds!(t, quantile = 0.0, want = 1.0);
     assert_error_bounds!(t, quantile = 0.5, want = 500.0);
+  }
+
+  #[test]
+  fn test_merge_distinct_digests() {
+    let mut digests: Vec<TDigest> = Vec::new();
+
+    for i in 0..100 {
+      let t = TDigest::new();
+      let values: Vec<f64> =
+        (1..=1_000).map(|x| f64::from(x + i * 1000)).collect();
+      let t = t.merge_values(values);
+      digests.push(t)
+    }
+
+    let t = TDigest::merge_digests(&digests);
+
+    assert_error_bounds!(t, quantile = 1.0, want = 100000.0);
+    assert_error_bounds!(t, quantile = 0.99, want = 99000.0);
+    assert_error_bounds!(
+      t,
+      quantile = 0.01,
+      want = 1000.0,
+      allowable_error = 0.2
+    );
+    assert_error_bounds!(t, quantile = 0.0, want = 1.0);
+    assert_error_bounds!(t, quantile = 0.5, want = 50000.0);
   }
 
   #[test]
