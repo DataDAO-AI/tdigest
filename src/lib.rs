@@ -503,30 +503,93 @@ mod tests {
   }
 
   #[test]
-  fn test_merge_values_against_uniform_distro() {
+  fn test_merge_values_against_uniform_distribution() {
     let t = TDigest::new();
     let values: Vec<f64> = (1..=1_000_000).map(f64::from).collect();
 
     let t = t.merge_values(values);
 
-    assert_error_bounds!(t, quantile = 1.0, want = 1_000_000.0);
-    assert_error_bounds!(t, quantile = 0.99, want = 990_000.0);
-    assert_error_bounds!(t, quantile = 0.01, want = 10_000.0);
     assert_error_bounds!(t, quantile = 0.0, want = 1.0);
+    assert_error_bounds!(t, quantile = 0.01, want = 10_000.0);
     assert_error_bounds!(t, quantile = 0.5, want = 500_000.0);
+    assert_error_bounds!(t, quantile = 0.99, want = 990_000.0);
+    assert_error_bounds!(t, quantile = 1.0, want = 1_000_000.0);
   }
 
   #[test]
-  fn test_merge_values_against_skewed_distro() {
+  fn test_merge_values_against_skewed_distribution() {
     let t = TDigest::new();
     let mut values: Vec<f64> = (1..=600_000).map(f64::from).collect();
     values.resize(1_000_000, 1_000_000_f64);
 
     let t = t.merge_values(values);
 
-    assert_error_bounds!(t, quantile = 0.99, want = 1_000_000.0);
     assert_error_bounds!(t, quantile = 0.01, want = 10_000.0);
     assert_error_bounds!(t, quantile = 0.5, want = 500_000.0);
+    assert_error_bounds!(t, quantile = 0.99, want = 1_000_000.0);
+  }
+
+  #[test]
+  fn test_merge_weighted_values_against_uniform_distribution() {
+    let t = TDigest::new();
+    let values: Vec<WeightedValue> =
+      (1..=1_000_000).map(|i| (i as f64, 1f64).into()).collect();
+
+    let t = t.merge_weighted_values(values);
+
+    assert_error_bounds!(t, quantile = 0.0, want = 1.0);
+    assert_error_bounds!(t, quantile = 0.01, want = 10_000.0);
+    assert_error_bounds!(t, quantile = 0.5, want = 500_000.0);
+    assert_error_bounds!(t, quantile = 0.99, want = 990_000.0);
+    assert_error_bounds!(t, quantile = 1.0, want = 1_000_000.0);
+  }
+
+  #[test]
+  fn test_merge_weighted_values_against_weighted_uniform_distribution() {
+    let t = TDigest::new();
+    let first_half = (1..=500_000).map(|i| (i as f64, 1f64).into());
+    let second_half =
+      (1..=250_000).map(|i| ((500_000 + i * 2) as f64, 2f64).into());
+    let values: Vec<WeightedValue> = first_half.chain(second_half).collect();
+
+    let t = t.merge_weighted_values(values);
+
+    assert_error_bounds!(t, quantile = 0.0, want = 1.0);
+    assert_error_bounds!(t, quantile = 0.01, want = 10_000.0);
+    assert_error_bounds!(t, quantile = 0.5, want = 500_000.0);
+    assert_error_bounds!(t, quantile = 0.99, want = 990_000.0);
+    assert_error_bounds!(t, quantile = 1.0, want = 1_000_000.0);
+  }
+
+  #[test]
+  fn test_merge_weighted_values_against_skewed_distribution() {
+    let t = TDigest::new();
+    let mut values: Vec<WeightedValue> =
+      (1..=600_000).map(|i| (i as f64, 1f64).into()).collect();
+    values.resize(1_000_000, (1_000_000_f64, 1f64).into());
+
+    let t = t.merge_weighted_values(values);
+
+    assert_error_bounds!(t, quantile = 0.01, want = 10_000.0);
+    assert_error_bounds!(t, quantile = 0.5, want = 500_000.0);
+    assert_error_bounds!(t, quantile = 0.99, want = 1_000_000.0);
+  }
+
+  #[test]
+  fn test_merge_weighted_values_against_weighted_skewed_distribution() {
+    let t = TDigest::new();
+    let first_half = (1..=300_000).map(|i| (i as f64, 1f64).into());
+    let second_half =
+      (1..=150_000).map(|i| ((300_000 + i * 2) as f64, 2f64).into());
+    let mut values: Vec<WeightedValue> =
+      first_half.chain(second_half).collect();
+    values.resize(1_000_000, (1_000_000_f64, 1f64).into());
+
+    let t = t.merge_weighted_values(values);
+
+    assert_error_bounds!(t, quantile = 0.01, want = 10_000.0);
+    assert_error_bounds!(t, quantile = 0.5, want = 500_000.0);
+    assert_error_bounds!(t, quantile = 0.99, want = 1_000_000.0);
   }
 
   #[test]
@@ -542,16 +605,16 @@ mod tests {
 
     let t = TDigest::merge_digests(&digests);
 
-    assert_error_bounds!(t, quantile = 1.0, want = 1000.0);
-    assert_error_bounds!(t, quantile = 0.99, want = 990.0);
+    assert_error_bounds!(t, quantile = 0.0, want = 1.0);
     assert_error_bounds!(
       t,
       quantile = 0.01,
       want = 10.0,
       allowable_error = 0.2
     );
-    assert_error_bounds!(t, quantile = 0.0, want = 1.0);
     assert_error_bounds!(t, quantile = 0.5, want = 500.0);
+    assert_error_bounds!(t, quantile = 0.99, want = 990.0);
+    assert_error_bounds!(t, quantile = 1.0, want = 1000.0);
   }
 
   #[test]
@@ -568,16 +631,16 @@ mod tests {
 
     let t = TDigest::merge_digests(&digests);
 
-    assert_error_bounds!(t, quantile = 1.0, want = 100000.0);
-    assert_error_bounds!(t, quantile = 0.99, want = 99000.0);
+    assert_error_bounds!(t, quantile = 0.0, want = 1.0);
     assert_error_bounds!(
       t,
       quantile = 0.01,
       want = 1000.0,
       allowable_error = 0.2
     );
-    assert_error_bounds!(t, quantile = 0.0, want = 1.0);
     assert_error_bounds!(t, quantile = 0.5, want = 50000.0);
+    assert_error_bounds!(t, quantile = 0.99, want = 99000.0);
+    assert_error_bounds!(t, quantile = 1.0, want = 100000.0);
   }
 
   #[test]
