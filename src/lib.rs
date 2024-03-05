@@ -42,8 +42,8 @@ impl WeightedValue {
     WeightedValue { value, weight }
   }
 
-  fn add(&mut self, sum: f64, weight: f64) -> f64 {
-    let new_sum = sum + self.weight * self.value;
+  fn add_sum(&mut self, sum: f64, weight: f64) -> f64 {
+    let new_sum = sum + self.sum();
     self.weight += weight;
     self.value = new_sum / self.weight;
     new_sum
@@ -59,7 +59,7 @@ pub struct TDigest {
   centroids: Vec<WeightedValue>,
   pub max_size: usize,
   pub sum: f64,
-  pub count: f64,
+  pub weight_sum: f64,
   pub max: f64,
   pub min: f64,
 }
@@ -70,7 +70,7 @@ impl TDigest {
       centroids: Vec::new(),
       max_size,
       sum: 0_f64,
-      count: 0_f64,
+      weight_sum: 0_f64,
       max: f64::NAN,
       min: f64::NAN,
     }
@@ -78,6 +78,17 @@ impl TDigest {
 
   pub fn new() -> Self {
     TDigest::new_with_max_size(DEFAULT_MAX_SIZE)
+  }
+
+  pub fn from_sorted_weighted_values(sorted_values: &[WeightedValue]) -> Self {
+    TDigest {
+      centroids: sorted_values.iter().map(|x| x.clone()).collect(),
+      max_size: sorted_values.len(),
+      sum: sorted_values.iter().map(WeightedValue::sum).sum(),
+      weight_sum: sorted_values.iter().map(|x| x.weight).sum(),
+      max: sorted_values.iter().max().unwrap().value,
+      min: sorted_values.iter().min().unwrap().value,
+    }
   }
 
   /// Size in bytes including `Self`.
@@ -89,14 +100,7 @@ impl TDigest {
 
 impl Default for TDigest {
   fn default() -> Self {
-    TDigest {
-      centroids: Vec::new(),
-      max_size: DEFAULT_MAX_SIZE,
-      sum: 0_f64,
-      count: 0_f64,
-      max: f64::NAN,
-      min: f64::NAN,
-    }
+    Self::new()
   }
 }
 
@@ -119,7 +123,7 @@ impl TDigest {
   }
 
   pub fn merge_weighted_values(
-    &self,
+    self,
     mut values: Vec<WeightedValue>,
   ) -> TDigest {
     values.sort();
@@ -127,18 +131,19 @@ impl TDigest {
   }
 
   pub fn merge_sorted_weighted_values(
-    &self,
+    self,
     sorted_values: &[WeightedValue],
   ) -> TDigest {
-    todo!()
+    let value_digest = TDigest::from_sorted_weighted_values(sorted_values);
+    Self::merge_digests(&[self, value_digest])
   }
 
-  pub fn merge_values(&self, mut values: Vec<f64>) -> TDigest {
+  pub fn merge_values(self, mut values: Vec<f64>) -> TDigest {
     values.sort_by(|a, b| a.total_cmp(b));
     self.merge_sorted_values(&values)
   }
 
-  pub fn merge_sorted_values(&self, sorted_values: &[f64]) -> TDigest {
+  pub fn merge_sorted_values(self, sorted_values: &[f64]) -> TDigest {
     #[cfg(debug_assertions)]
     debug_assert!(
       is_sorted(sorted_values),
@@ -150,12 +155,12 @@ impl TDigest {
     }
 
     let mut result = TDigest::new_with_max_size(self.max_size);
-    result.count = self.count + (sorted_values.len() as f64);
+    result.weight_sum = self.weight_sum + (sorted_values.len() as f64);
 
     let maybe_min = *sorted_values.first().unwrap();
     let maybe_max = *sorted_values.last().unwrap();
 
-    if self.count > 0.0 {
+    if self.weight_sum > 0.0 {
       result.min = self.min.min(maybe_min);
       result.max = self.max.max(maybe_max);
     } else {
@@ -166,8 +171,8 @@ impl TDigest {
     let mut compressed: Vec<WeightedValue> = Vec::with_capacity(self.max_size);
 
     let mut k_limit: f64 = 1.0;
-    let mut q_limit_times_count =
-      Self::k_to_q(k_limit, self.max_size as f64) * result.count;
+    let mut weight_scaled_q_limit =
+      Self::k_to_q(k_limit, self.max_size as f64) * result.weight_sum;
     k_limit += 1.0;
 
     let mut iter_centroids = self.centroids.iter().peekable();
@@ -206,23 +211,23 @@ impl TDigest {
       let next_sum = next.sum();
       weight_so_far += next.weight;
 
-      if weight_so_far <= q_limit_times_count {
+      if weight_so_far <= weight_scaled_q_limit {
         sums_to_merge += next_sum;
         weights_to_merge += next.weight;
       } else {
-        result.sum += curr.add(sums_to_merge, weights_to_merge);
+        result.sum += curr.add_sum(sums_to_merge, weights_to_merge);
         sums_to_merge = 0_f64;
         weights_to_merge = 0_f64;
 
         compressed.push(curr.clone());
-        q_limit_times_count =
-          Self::k_to_q(k_limit, self.max_size as f64) * result.count;
+        weight_scaled_q_limit =
+          Self::k_to_q(k_limit, self.max_size as f64) * result.weight_sum;
         k_limit += 1.0;
         curr = next;
       }
     }
 
-    result.sum += curr.add(sums_to_merge, weights_to_merge);
+    result.sum += curr.add_sum(sums_to_merge, weights_to_merge);
     compressed.push(curr);
     compressed.shrink_to_fit();
     compressed.sort();
@@ -287,7 +292,7 @@ impl TDigest {
     let mut centroids: Vec<WeightedValue> = Vec::with_capacity(n_centroids);
     let mut starts: Vec<usize> = Vec::with_capacity(digests.len());
 
-    let mut count: f64 = 0.0;
+    let mut weight_sum: f64 = 0.0;
     let mut min = f64::INFINITY;
     let mut max = f64::NEG_INFINITY;
 
@@ -295,11 +300,11 @@ impl TDigest {
     for digest in digests.iter() {
       starts.push(start);
 
-      let curr_count: f64 = digest.count;
-      if curr_count > 0.0 {
+      let curr_weight_sum: f64 = digest.weight_sum;
+      if curr_weight_sum > 0.0 {
         min = min.min(digest.min);
         max = max.max(digest.max);
-        count += curr_count;
+        weight_sum += curr_weight_sum;
         for centroid in &digest.centroids {
           centroids.push(centroid.clone());
           start += 1;
@@ -331,8 +336,8 @@ impl TDigest {
     let mut compressed: Vec<WeightedValue> = Vec::with_capacity(max_size);
 
     let mut k_limit: f64 = 1.0;
-    let mut q_limit_times_count =
-      Self::k_to_q(k_limit, max_size as f64) * (count);
+    let mut weight_scaled_q_limit =
+      Self::k_to_q(k_limit, max_size as f64) * weight_sum;
 
     let mut iter_centroids = centroids.iter_mut();
     let mut curr = iter_centroids.next().unwrap();
@@ -343,26 +348,27 @@ impl TDigest {
     for centroid in iter_centroids {
       weight_so_far += centroid.weight;
 
-      if weight_so_far <= q_limit_times_count {
+      if weight_so_far <= weight_scaled_q_limit {
         sums_to_merge += centroid.sum();
         weights_to_merge += centroid.weight;
       } else {
-        result.sum += curr.add(sums_to_merge, weights_to_merge);
+        result.sum += curr.add_sum(sums_to_merge, weights_to_merge);
         sums_to_merge = 0_f64;
         weights_to_merge = 0_f64;
         compressed.push(curr.clone());
-        q_limit_times_count = Self::k_to_q(k_limit, max_size as f64) * (count);
+        weight_scaled_q_limit =
+          Self::k_to_q(k_limit, max_size as f64) * weight_sum;
         k_limit += 1.0;
         curr = centroid;
       }
     }
 
-    result.sum += curr.add(sums_to_merge, weights_to_merge);
+    result.sum += curr.add_sum(sums_to_merge, weights_to_merge);
     compressed.push(curr.clone());
     compressed.shrink_to_fit();
     compressed.sort();
 
-    result.count = count;
+    result.weight_sum = weight_sum;
     result.min = min;
     result.max = max;
     result.centroids = compressed;
@@ -375,8 +381,7 @@ impl TDigest {
       return 0.0;
     }
 
-    let count_ = self.count;
-    let rank = q * count_;
+    let rank = q * self.weight_sum;
 
     let mut pos: usize;
     let mut t;
@@ -386,7 +391,7 @@ impl TDigest {
       }
 
       pos = 0;
-      t = count_;
+      t = self.weight_sum;
 
       for (k, centroid) in self.centroids.iter().enumerate().rev() {
         t -= centroid.weight;
@@ -519,8 +524,9 @@ mod tests {
   #[test]
   fn test_merge_values_against_skewed_distribution() {
     let t = TDigest::new();
-    let mut values: Vec<f64> = (1..=600_000).map(f64::from).collect();
-    values.resize(1_000_000, 1_000_000_f64);
+    let first_segment = (1..=600_000).map(f64::from);
+    let second_segment = std::iter::repeat(1_000_000_f64).take(400_000);
+    let values: Vec<f64> = first_segment.chain(second_segment).collect();
 
     let t = t.merge_values(values);
 
@@ -547,16 +553,19 @@ mod tests {
   #[test]
   fn test_merge_weighted_values_against_weighted_uniform_distribution() {
     let t = TDigest::new();
-    let first_half = (1..=500_000).map(|i| (i as f64, 1f64).into());
-    let second_half =
+    let first_segment = (1..=500_000).map(|i| (i as f64, 1f64).into());
+    let second_segment =
       (1..=250_000).map(|i| ((500_000 + i * 2) as f64, 2f64).into());
-    let values: Vec<WeightedValue> = first_half.chain(second_half).collect();
+    let values: Vec<WeightedValue> =
+      first_segment.chain(second_segment).collect();
 
     let t = t.merge_weighted_values(values);
 
     assert_error_bounds!(t, quantile = 0.0, want = 1.0);
     assert_error_bounds!(t, quantile = 0.01, want = 10_000.0);
+    assert_error_bounds!(t, quantile = 0.25, want = 250_000.0);
     assert_error_bounds!(t, quantile = 0.5, want = 500_000.0);
+    assert_error_bounds!(t, quantile = 0.75, want = 750_000.0);
     assert_error_bounds!(t, quantile = 0.99, want = 990_000.0);
     assert_error_bounds!(t, quantile = 1.0, want = 1_000_000.0);
   }
@@ -564,9 +573,11 @@ mod tests {
   #[test]
   fn test_merge_weighted_values_against_skewed_distribution() {
     let t = TDigest::new();
-    let mut values: Vec<WeightedValue> =
-      (1..=600_000).map(|i| (i as f64, 1f64).into()).collect();
-    values.resize(1_000_000, (1_000_000_f64, 1f64).into());
+    let first_segment = (1..=600_000).map(|i| (i as f64, 1f64).into());
+    let second_segment =
+      std::iter::repeat((1_000_000_f64, 1f64).into()).take(400_000);
+    let values: Vec<WeightedValue> =
+      first_segment.chain(second_segment).collect();
 
     let t = t.merge_weighted_values(values);
 
@@ -577,13 +588,16 @@ mod tests {
 
   #[test]
   fn test_merge_weighted_values_against_weighted_skewed_distribution() {
-    let t = TDigest::new();
-    let first_half = (1..=300_000).map(|i| (i as f64, 1f64).into());
-    let second_half =
+    let t = TDigest::new_with_max_size(1000);
+    let first_segment = (1..=300_000).map(|i| (i as f64, 1f64).into());
+    let second_segment =
       (1..=150_000).map(|i| ((300_000 + i * 2) as f64, 2f64).into());
-    let mut values: Vec<WeightedValue> =
-      first_half.chain(second_half).collect();
-    values.resize(1_000_000, (1_000_000_f64, 1f64).into());
+    let third_segment =
+      std::iter::repeat((1_000_000_f64, 1f64).into()).take(400_000);
+    let values: Vec<WeightedValue> = first_segment
+      .chain(second_segment)
+      .chain(third_segment)
+      .collect();
 
     let t = t.merge_weighted_values(values);
 
