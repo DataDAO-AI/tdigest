@@ -80,15 +80,54 @@ impl TDigest {
     TDigest::new_with_max_size(DEFAULT_MAX_SIZE)
   }
 
-  pub fn from_sorted_weighted_values(sorted_values: &[WeightedValue]) -> Self {
-    TDigest {
-      centroids: sorted_values.iter().map(|x| x.clone()).collect(),
-      max_size: sorted_values.len(),
-      sum: sorted_values.iter().map(WeightedValue::sum).sum(),
-      weight_sum: sorted_values.iter().map(|x| x.weight).sum(),
-      max: sorted_values.iter().max().unwrap().value,
-      min: sorted_values.iter().min().unwrap().value,
+  pub fn compress_from_weighted_values(
+    mut centroids: Vec<WeightedValue>,
+    max_size: usize,
+    weight_sum: f64,
+    min: f64,
+    max: f64,
+  ) -> TDigest {
+    let mut result = TDigest::new_with_max_size(max_size);
+    let mut compressed: Vec<WeightedValue> = Vec::with_capacity(max_size);
+
+    let mut weight_scaled_q_limit =
+      Self::k_to_q(1.0, max_size as f64) * weight_sum;
+
+    let mut iter_centroids = centroids.iter_mut();
+    let mut curr = iter_centroids.next().unwrap();
+    let mut weight_so_far = curr.weight;
+    let mut sums_to_merge = 0_f64;
+    let mut weights_to_merge = 0_f64;
+
+    let mut k_limit = 1_f64;
+    for centroid in iter_centroids {
+      weight_so_far += centroid.weight;
+
+      if weight_so_far <= weight_scaled_q_limit {
+        sums_to_merge += centroid.sum();
+        weights_to_merge += centroid.weight;
+      } else {
+        result.sum += curr.add_sum(sums_to_merge, weights_to_merge);
+        sums_to_merge = 0_f64;
+        weights_to_merge = 0_f64;
+        compressed.push(curr.clone());
+        weight_scaled_q_limit =
+          Self::k_to_q(k_limit, max_size as f64) * weight_sum;
+        k_limit += 1.0;
+        curr = centroid;
+      }
     }
+
+    result.sum += curr.add_sum(sums_to_merge, weights_to_merge);
+    compressed.push(curr.clone());
+    compressed.shrink_to_fit();
+    compressed.sort();
+
+    result.weight_sum = weight_sum;
+    result.min = min;
+    result.max = max;
+    result.centroids = compressed;
+    result
   }
 
   /// Size in bytes including `Self`.
@@ -126,16 +165,36 @@ impl TDigest {
     self,
     mut values: Vec<WeightedValue>,
   ) -> TDigest {
-    values.sort();
-    self.merge_sorted_weighted_values(&values)
-  }
+    let (weight_sum, min, max) = values.iter().fold(
+      (self.weight_sum, self.min, self.max),
+      |(weight_sum, min, max), weighted_value| {
+        (
+          weight_sum + weighted_value.weight,
+          min.min(weighted_value.value),
+          max.max(weighted_value.value),
+        )
+      },
+    );
 
-  pub fn merge_sorted_weighted_values(
-    self,
-    sorted_values: &[WeightedValue],
-  ) -> TDigest {
-    let value_digest = TDigest::from_sorted_weighted_values(sorted_values);
-    Self::merge_digests(&[self, value_digest])
+    let original_centroid_count = self.centroids.len();
+    let mut all_values = self.centroids;
+    all_values.append(&mut values);
+    let value_count = all_values.len();
+
+    Self::external_merge(
+      &mut all_values,
+      0,
+      original_centroid_count,
+      value_count,
+    );
+
+    Self::compress_from_weighted_values(
+      all_values,
+      self.max_size,
+      weight_sum,
+      min,
+      max,
+    )
   }
 
   pub fn merge_values(self, mut values: Vec<f64>) -> TDigest {
@@ -170,10 +229,8 @@ impl TDigest {
 
     let mut compressed: Vec<WeightedValue> = Vec::with_capacity(self.max_size);
 
-    let mut k_limit: f64 = 1.0;
     let mut weight_scaled_q_limit =
-      Self::k_to_q(k_limit, self.max_size as f64) * result.weight_sum;
-    k_limit += 1.0;
+      Self::k_to_q(1.0, self.max_size as f64) * result.weight_sum;
 
     let mut iter_centroids = self.centroids.iter().peekable();
     let mut iter_sorted_values = sorted_values.iter().peekable();
@@ -194,6 +251,7 @@ impl TDigest {
     let mut sums_to_merge = 0_f64;
     let mut weights_to_merge = 0_f64;
 
+    let mut k_limit = 2_f64;
     while iter_centroids.peek().is_some() || iter_sorted_values.peek().is_some()
     {
       let next: WeightedValue = if let Some(c) = iter_centroids.peek() {
@@ -332,47 +390,9 @@ impl TDigest {
       digests_per_block *= 2;
     }
 
-    let mut result = TDigest::new_with_max_size(max_size);
-    let mut compressed: Vec<WeightedValue> = Vec::with_capacity(max_size);
-
-    let mut k_limit: f64 = 1.0;
-    let mut weight_scaled_q_limit =
-      Self::k_to_q(k_limit, max_size as f64) * weight_sum;
-
-    let mut iter_centroids = centroids.iter_mut();
-    let mut curr = iter_centroids.next().unwrap();
-    let mut weight_so_far = curr.weight;
-    let mut sums_to_merge = 0_f64;
-    let mut weights_to_merge = 0_f64;
-
-    for centroid in iter_centroids {
-      weight_so_far += centroid.weight;
-
-      if weight_so_far <= weight_scaled_q_limit {
-        sums_to_merge += centroid.sum();
-        weights_to_merge += centroid.weight;
-      } else {
-        result.sum += curr.add_sum(sums_to_merge, weights_to_merge);
-        sums_to_merge = 0_f64;
-        weights_to_merge = 0_f64;
-        compressed.push(curr.clone());
-        weight_scaled_q_limit =
-          Self::k_to_q(k_limit, max_size as f64) * weight_sum;
-        k_limit += 1.0;
-        curr = centroid;
-      }
-    }
-
-    result.sum += curr.add_sum(sums_to_merge, weights_to_merge);
-    compressed.push(curr.clone());
-    compressed.shrink_to_fit();
-    compressed.sort();
-
-    result.weight_sum = weight_sum;
-    result.min = min;
-    result.max = max;
-    result.centroids = compressed;
-    result
+    Self::compress_from_weighted_values(
+      centroids, max_size, weight_sum, min, max,
+    )
   }
 
   /// To estimate the value located at `q` quantile
