@@ -85,53 +85,57 @@ impl TDigest {
   }
 
   pub fn compress_from_weighted_values(
-    mut centroids: Vec<WeightedValue>,
+    mut values: Vec<WeightedValue>,
     max_size: usize,
     weight_sum: f64,
     min: f64,
     max: f64,
   ) -> TDigest {
     let mut result = TDigest::new_with_max_size(max_size);
-    let mut compressed: Vec<WeightedValue> = Vec::with_capacity(max_size);
 
-    let mut weight_scaled_q_limit =
-      Self::k_to_q(1.0, max_size as f64) * weight_sum;
+    let mut iter_values = values.iter_mut();
+    match iter_values.next() {
+      None => result,
+      Some(first_value) => {
+        let mut compressed: Vec<WeightedValue> = Vec::with_capacity(max_size);
+        let mut weight_scaled_q_limit =
+          Self::k_to_q(1.0, max_size as f64) * weight_sum;
+        let mut curr = first_value;
+        let mut weight_so_far = curr.weight;
+        let mut sums_to_merge = 0_f64;
+        let mut weights_to_merge = 0_f64;
 
-    let mut iter_centroids = centroids.iter_mut();
-    let mut curr = iter_centroids.next().unwrap();
-    let mut weight_so_far = curr.weight;
-    let mut sums_to_merge = 0_f64;
-    let mut weights_to_merge = 0_f64;
+        let mut k_limit = 1_f64;
+        for centroid in iter_values {
+          weight_so_far += centroid.weight;
 
-    let mut k_limit = 1_f64;
-    for centroid in iter_centroids {
-      weight_so_far += centroid.weight;
+          if weight_so_far <= weight_scaled_q_limit {
+            sums_to_merge += centroid.sum();
+            weights_to_merge += centroid.weight;
+          } else {
+            result.sum += curr.add_sum(sums_to_merge, weights_to_merge);
+            sums_to_merge = 0_f64;
+            weights_to_merge = 0_f64;
+            compressed.push(curr.clone());
+            weight_scaled_q_limit =
+              Self::k_to_q(k_limit, max_size as f64) * weight_sum;
+            k_limit += 1.0;
+            curr = centroid;
+          }
+        }
 
-      if weight_so_far <= weight_scaled_q_limit {
-        sums_to_merge += centroid.sum();
-        weights_to_merge += centroid.weight;
-      } else {
         result.sum += curr.add_sum(sums_to_merge, weights_to_merge);
-        sums_to_merge = 0_f64;
-        weights_to_merge = 0_f64;
         compressed.push(curr.clone());
-        weight_scaled_q_limit =
-          Self::k_to_q(k_limit, max_size as f64) * weight_sum;
-        k_limit += 1.0;
-        curr = centroid;
+        compressed.shrink_to_fit();
+        compressed.sort();
+
+        result.weight_sum = weight_sum;
+        result.min = min;
+        result.max = max;
+        result.centroids = compressed;
+        result
       }
     }
-
-    result.sum += curr.add_sum(sums_to_merge, weights_to_merge);
-    compressed.push(curr.clone());
-    compressed.shrink_to_fit();
-    compressed.sort();
-
-    result.weight_sum = weight_sum;
-    result.min = min;
-    result.max = max;
-    result.centroids = compressed;
-    result
   }
 
   /// Size in bytes including `Self`.
