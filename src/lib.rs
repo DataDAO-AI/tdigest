@@ -49,6 +49,10 @@ impl WeightedValue {
     new_sum
   }
 
+  fn value(&self) -> f64 {
+    self.value
+  }
+
   fn sum(&self) -> f64 {
     self.value * self.weight
   }
