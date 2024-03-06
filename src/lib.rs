@@ -38,7 +38,7 @@ impl Default for WeightedValue {
 }
 
 impl WeightedValue {
-  fn new(value: f64, weight: f64) -> Self {
+  pub fn new(value: f64, weight: f64) -> Self {
     WeightedValue { value, weight }
   }
 
@@ -49,7 +49,7 @@ impl WeightedValue {
     new_sum
   }
 
-  fn value(&self) -> f64 {
+  pub fn value(&self) -> f64 {
     self.value
   }
 
