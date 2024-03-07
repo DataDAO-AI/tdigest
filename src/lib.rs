@@ -1,8 +1,10 @@
 use std::cmp::Ordering;
 
+use serde::{Deserialize, Serialize};
+
 const DEFAULT_MAX_SIZE: usize = 100;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct WeightedValue {
   value: f64,
   weight: f64,
@@ -58,7 +60,7 @@ impl WeightedValue {
   }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct TDigest {
   centroids: Vec<WeightedValue>,
   pub max_size: usize,
